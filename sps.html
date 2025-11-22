@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stone-Paper-Scissor Champion</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Tone.js for sound effects -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <!-- Load Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables must be defined on window for use in the main script block
+        window.initializeApp = initializeApp;
+        window.getAuth = getAuth;
+        window.signInAnonymously = signInAnonymously;
+        window.signInWithCustomToken = signInWithCustomToken;
+        window.getFirestore = getFirestore;
+        window.setLogLevel = setLogLevel;
+    </script>
+    <style>
+        /* Custom Styles for Hand Animation and Game Layout */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Bebas+Neue&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #1f2937, #0a0e14);
+            color: #e5e7eb;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column; /* Allow content and footer to stack */
+            align-items: center;
+            justify-content: space-between; /* Push footer to the bottom */
+            padding: 1rem;
+        }
+
+        .game-container {
+            max-width: 900px;
+            width: 100%;
+            background-color: #111827;
+            border-radius: 1.5rem;
+            padding: 2rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            border: 1px solid #374151;
+            flex-grow: 1; /* Allow container to take space */
+            margin-bottom: 2rem; /* Space before footer */
+        }
+
+        .hand-display {
+            font-size: 8rem; /* Large emoji size */
+            height: 128px; /* Fixed height for animation */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s ease-out;
+        }
+        
+        /* Shaking animation for the bot's choice before the reveal */
+        @keyframes shake {
+            0%, 100% { transform: translate(0, 0); }
+            20% { transform: translate(-5px, 0); }
+            40% { transform: translate(5px, 0); }
+            60% { transform: translate(-5px, 0); }
+            80% { transform: translate(5px, 0); }
+        }
+
+        .shaking {
+            animation: shake 0.15s infinite;
+        }
+
+        .choice-button {
+            transition: all 0.1s;
+            transform: scale(1);
+        }
+        
+        .choice-button:hover:not(:disabled) {
+            transform: scale(1.05);
+            box-shadow: 0 0 20px rgba(79, 70, 229, 0.5);
+        }
+
+        .timer-bar {
+            height: 8px;
+            background-color: #4f46e5;
+            /* Transition will be set dynamically in JS to handle pause/resume */
+            border-radius: 4px;
+        }
+
+        .timer-container {
+            background-color: #374151;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .title-text {
+            font-family: 'Bebas Neue', sans-serif;
+            letter-spacing: 2px;
+        }
+        
+        .modal-content {
+            background-color: #1f2937;
+            border-radius: 1rem;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.7);
+        }
+        
+        /* Zoom-out animation for next round message */
+        @keyframes zoomOut {
+            0% { transform: scale(1.2); opacity: 0; }
+            50% { transform: scale(1); opacity: 1; }
+            100% { transform: scale(0.8); opacity: 0.5; }
+        }
+        .zoom-out-msg {
+            animation: zoomOut 3s forwards;
+        }
+
+        /* Responsive adjustments for the game area */
+        @media (max-width: 640px) {
+            .hand-display {
+                font-size: 6rem;
+            }
+            .choice-button {
+                padding: 0.75rem 0.5rem;
+                font-size: 0.875rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Main Game Container -->
+    <div id="game-app" class="game-container">
+        
+        <!-- Title and Controls -->
+        <div class="relative mb-8 pt-4"> 
+            <!-- Left: How to Play -->
+            <span onclick="showRulesModal()" class="absolute top-0 left-0 text-sm text-gray-400 hover:text-blue-300 cursor-pointer transition duration-150 font-semibold">
+                How to Play
+            </span>
+            
+            <h1 class="text-3xl sm:text-4xl text-center title-text text-blue-400">STONE - PAPER - SCISSOR CHALLENGE</h1>
+
+            <!-- Right: Pause/Resume and Restart -->
+            <div id="game-controls" class="absolute top-0 right-0 flex space-x-2 hidden">
+                <button id="pause-resume-btn" onclick="togglePauseResume()" 
+                        class="px-3 py-1 text-xs font-bold text-white rounded-lg transition duration-200 bg-yellow-600 hover:bg-yellow-700 shadow-lg shadow-yellow-500/50">
+                    Pause
+                </button>
+                <button id="restart-btn" onclick="showRestartConfirmation()" 
+                        class="px-3 py-1 text-xs font-bold text-white rounded-lg transition duration-200 bg-red-600 hover:bg-red-700 shadow-lg shadow-red-500/50">
+                    Restart
+                </button>
+            </div>
+        </div>
+        
+        <!-- Welcome/Name Input Screen -->
+        <div id="name-screen" class="space-y-6">
+            <p class="text-xl text-center text-gray-300">Welcome, Challenger! What name should we use?</p>
+            <div class="flex flex-col sm:flex-row gap-4 items-center justify-center">
+                <input type="text" id="user-name-input" placeholder="Enter your name (e.g., Hero)"
+                       class="w-full sm:w-80 p-3 bg-gray-700 text-white border border-gray-600 rounded-lg focus:ring-blue-500 focus:border-blue-500">
+                <button onclick="startGame()"
+                        class="w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-bold text-white transition duration-200 shadow-lg shadow-blue-500/50"
+                        id="start-game-btn">
+                    Start Game
+                </button>
+            </div>
+            <p id="error-message" class="text-red-400 text-center hidden">Please enter a valid name.</p>
+        </div>
+
+        <!-- Game Play Screen -->
+        <div id="game-screen" class="hidden space-y-8">
+            
+            <!-- Scoreboard -->
+            <div class="flex justify-between items-center text-lg font-semibold bg-gray-800 p-4 rounded-xl shadow-inner border border-gray-700">
+                <div class="flex flex-col items-center">
+                    <span id="user-name-display" class="text-green-400">User</span>
+                    <span id="user-score" class="text-4xl font-bold mt-1 text-green-300">0</span>
+                </div>
+                <div class="text-4xl font-extrabold text-red-500 mx-8 title-text">VS</div>
+                <div class="flex flex-col items-center">
+                    <span class="text-red-400">BOT</span>
+                    <span id="bot-score" class="text-4xl font-bold mt-1 text-red-300">0</span>
+                </div>
+            </div>
+
+            <!-- Hand Displays - Swapped for better alignment -->
+            <div class="flex justify-around items-start h-32">
+                <div class="flex flex-col items-center">
+                    <p class="text-xl font-medium mb-2 text-green-300" id="user-move-label">Your Move</p>
+                    <div id="user-hand" class="hand-display">❓</div>
+                </div>
+                <div class="flex flex-col items-center">
+                    <p class="text-xl font-medium mb-2 text-red-300">BOT's Move</p>
+                    <div id="bot-hand" class="hand-display shaking">❓</div>
+                </div>
+            </div>
+
+            <!-- Round Result & Timer -->
+            <div class="space-y-4">
+                <div id="result-message" class="text-2xl font-bold text-center h-8">
+                    Make your choice!
+                </div>
+                <div class="timer-container w-full">
+                    <div id="timer-bar" class="timer-bar w-0"></div>
+                </div>
+            </div>
+            
+            <!-- Choice Buttons -->
+            <div id="choice-buttons" class="grid grid-cols-3 gap-4">
+                <button id="stone-btn" onclick="userChoice('stone')" disabled
+                        class="choice-button bg-gray-600 hover:bg-gray-500 p-3 rounded-xl text-white font-bold text-lg flex flex-col items-center disabled:opacity-50">
+                    <span class="text-4xl">✊</span> Stone
+                </button>
+                <button id="paper-btn" onclick="userChoice('paper')" disabled
+                        class="choice-button bg-gray-600 hover:bg-gray-500 p-3 rounded-xl text-white font-bold text-lg flex flex-col items-center disabled:opacity-50">
+                    <span class="text-4xl">🖐️</span> Paper
+                </button>
+                <button id="scissor-btn" onclick="userChoice('scissor')" disabled
+                        class="choice-button bg-gray-600 hover:bg-gray-500 p-3 rounded-xl text-white font-bold text-lg flex flex-col items-center disabled:opacity-50">
+                    <span class="text-4xl">✌️</span> Scissor
+                </button>
+            </div>
+            
+            <!-- Removed 'Next Round' button -->
+            <div class="w-full h-12"></div>
+        </div>
+    </div>
+    
+    <!-- Footer Section for Copyright -->
+    <footer class="mt-4 py-2 text-center text-gray-500 text-sm">
+        &copy; 2025 siddh4n7. All Rights Reserved
+    </footer>
+    
+    <!-- Modal for Game Over -->
+    <div id="game-over-modal" class="fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center hidden p-4">
+        <div id="modal-content" class="modal-content w-full max-w-lg p-6 sm:p-8 space-y-6 text-center">
+            <h2 id="modal-title" class="text-4xl title-text text-yellow-400">Game Over!</h2>
+            <p id="modal-message" class="text-lg text-gray-300">Thanks for playing!</p>
+            
+            <!-- Image Generation Placeholder -->
+            <div id="image-display-area" class="w-full flex justify-center items-center h-64 bg-gray-800 rounded-lg border border-gray-700 relative">
+                <p id="image-loading-text" class="text-blue-400 animate-pulse hidden">Generating your champion image...</p>
+                <img id="champion-image" src="" alt="Champion Prize" class="max-h-full max-w-full rounded-lg object-contain hidden"/>
+            </div>
+
+            <button onclick="resetGame()"
+                    class="w-full py-3 bg-red-600 hover:bg-red-700 rounded-lg font-bold text-white text-xl transition duration-200 shadow-lg shadow-red-500/50">
+                Play Again
+            </button>
+        </div>
+    </div>
+    
+    <!-- Modal for Game Rules (How to Play) -->
+    <div id="rules-modal" class="fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center hidden p-4">
+        <div class="modal-content w-full max-w-md p-6 sm:p-8 space-y-4 text-left">
+            <h2 class="text-3xl title-text text-blue-400 text-center border-b pb-2 border-gray-700">How to Play</h2>
+            <p class="text-gray-300">
+                This is a best-of-5 Stone-Paper-Scissor championship against the Bot. The first to reach 3 wins takes the crown!
+            </p>
+            <ul class="list-disc list-inside space-y-2 text-gray-300 pl-4">
+                <li>You must win <span class="font-bold text-green-300">3 rounds</span> to win the game.</li>
+                <li>You have <span class="font-bold text-yellow-300">5 seconds</span> to make your choice per round.</li>
+                <li class="mt-3">Stone (✊) beats Scissor (✌️)</li>
+                <li>Scissor (✌️) beats Paper (🖐️)</li>
+                <li>Paper (🖐️) beats Stone (✊)</li>
+                <li>If both choose the same, it's a Draw.</li>
+            </ul>
+            <button onclick="hideRulesModal()"
+                    class="mt-4 w-full py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-bold text-white transition duration-200 shadow-lg">
+                Got It!
+            </button>
+        </div>
+    </div>
+    
+    <!-- Modal for Restart Confirmation -->
+    <div id="restart-confirm-modal" class="fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center hidden p-4">
+        <div class="modal-content w-full max-w-sm p-6 sm:p-8 space-y-6 text-center">
+            <h2 class="text-3xl title-text text-red-400">Restart Game?</h2>
+            <p class="text-lg text-gray-300">Are you sure you want to restart the game? All current scores will be lost.</p>
+            <div class="flex justify-center space-x-4">
+                <button onclick="confirmRestart()"
+                        class="px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-bold text-white transition duration-200 shadow-lg shadow-green-500/50">
+                    Yes, Restart
+                </button>
+                <button onclick="hideRestartConfirmation()"
+                        class="px-6 py-2 bg-gray-500 hover:bg-gray-600 rounded-lg font-bold text-white transition duration-200 shadow-lg shadow-gray-500/50">
+                    No, Continue
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Game Variables ---
+        let userName = '';
+        let userScore = 0;
+        let botScore = 0;
+        let timerInterval;
+        let timerDuration = 5000; // 5 seconds in milliseconds
+        let elapsedTimeInRound = 0; // Tracks elapsed time in the current round
+        let isPaused = false;
+        const choices = ['stone', 'paper', 'scissor'];
+        const choiceEmojis = {
+            'stone': '✊',
+            'paper': '🖐️',
+            'scissor': '✌️'
+        };
+
+        // --- DOM Elements ---
+        const gameControls = document.getElementById('game-controls');
+        const pauseResumeBtn = document.getElementById('pause-resume-btn');
+        const nameScreen = document.getElementById('name-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const userNameInput = document.getElementById('user-name-input');
+        const userNameDisplay = document.getElementById('user-name-display');
+        const userScoreElem = document.getElementById('user-score');
+        const botScoreElem = document.getElementById('bot-score');
+        const userHandElem = document.getElementById('user-hand');
+        const botHandElem = document.getElementById('bot-hand');
+        const resultMessageElem = document.getElementById('result-message');
+        const timerBarElem = document.getElementById('timer-bar');
+        const choiceButtons = document.getElementById('choice-buttons').querySelectorAll('button');
+        const modal = document.getElementById('game-over-modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalMessage = document.getElementById('modal-message');
+        const championImage = document.getElementById('champion-image');
+        const imageLoadingText = document.getElementById('image-loading-text');
+
+        // --- Firebase Initialization (Required Setup) ---
+        let db, auth;
+        const apiKey = ""; // API Key is left blank as per instructions
+        const API_URL_TEXT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+        const API_URL_IMAGE = `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`;
+
+        window.onload = async function() {
+            // Check for required globals from the module import
+            if (typeof window.initializeApp === 'undefined') {
+                console.error("Firebase SDK not loaded correctly. Check the module script tag.");
+                return;
+            }
+
+            // Global variables provided by the Canvas environment
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+            if (firebaseConfig) {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                // setLogLevel('Debug'); // Uncomment for verbose logging
+
+                // 1. Authenticate the user
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    console.log("Firebase Auth successful. User ID:", auth.currentUser?.uid || 'Anonymous');
+                } catch (error) {
+                    console.error("Firebase Auth failed:", error);
+                }
+            } else {
+                console.warn("Firebase config is missing. App will run in local mode without data persistence or advanced model calls.");
+            }
+        };
+
+        // --- Audio Variables and Setup ---
+        let winSynth, loseSynth, moveSynth, roundSynth, drawSynth; 
+        let victoryPart, defeatPart; // For game over music sequences
+        let isAudioInitialized = false;
+
+        function initAudio() {
+            if (isAudioInitialized) return;
+            Tone.start();
+
+            // ROUND SOUNDS
+            winSynth = new Tone.PolySynth(Tone.Synth, {
+                oscillator: { type: "square" },
+                envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.5 },
+            }).toDestination();
+
+            loseSynth = new Tone.PolySynth(Tone.Synth, {
+                oscillator: { type: "triangle" },
+                envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.5 },
+            }).toDestination();
+            
+            moveSynth = new Tone.PluckSynth().toDestination();
+
+            roundSynth = new Tone.MetalSynth({
+                frequency: 100,
+                envelope: { attack: 0.001, decay: 0.1, release: 0.1 },
+                harmonicity: 3.1,
+                modulationIndex: 10,
+                resonance: 4000,
+                octaves: 1.5,
+            }).toDestination();
+            
+            drawSynth = new Tone.MembraneSynth({
+                pitchDecay: 0.05,
+                octaves: 1,
+                envelope: { attack: 0.001, decay: 0.2, sustain: 0.01, release: 0.1 }
+            }).toDestination();
+
+
+            // GAME OVER MUSIC SETUP
+            const gameMusicSynth = new Tone.Synth({
+                oscillator: { type: "sine" },
+                envelope: { attack: 0.05, decay: 0.4, sustain: 0.1, release: 0.8 }
+            }).toDestination();
+
+            const victorySequence = [
+                { time: 0, note: "C5", duration: "8n" },
+                { time: "8n", note: "E5", duration: "8n" },
+                { time: "4n", note: "G5", duration: "8n" },
+                { time: "3n", note: "C6", duration: "4n" }
+            ];
+            victoryPart = new Tone.Part((time, value) => {
+                gameMusicSynth.triggerAttackRelease(value.note, value.duration, time);
+            }, victorySequence).start(0);
+            victoryPart.loop = true;
+            victoryPart.loopEnd = "1n";
+            victoryPart.stop();
+
+            const defeatSequence = [
+                { time: 0, note: "E4", duration: "8n" },
+                { time: "8n", note: "C4", duration: "8n" },
+                { time: "4n", note: "A3", duration: "4n" }
+            ];
+            defeatPart = new Tone.Part((time, value) => {
+                gameMusicSynth.triggerAttackRelease(value.note, value.duration, time);
+            }, defeatSequence).start(0);
+            defeatPart.loop = true;
+            defeatPart.loopEnd = "2n";
+            defeatPart.stop();
+
+            isAudioInitialized = true;
+        }
+
+        // --- Sound Effect Functions ---
+        function playWinSound() {
+            if (!isAudioInitialized) return;
+            winSynth.triggerAttackRelease(["C4", "E4", "G4"], "8n");
+        }
+
+        function playLoseSound() {
+            if (!isAudioInitialized) return;
+            loseSynth.triggerAttackRelease("E4", "16n", "+0");
+            loseSynth.triggerAttackRelease("C4", "16n", "+0.1");
+            loseSynth.triggerAttackRelease("A3", "16n", "+0.2");
+        }
+
+        function playDrawSound() {
+            if (!isAudioInitialized) return;
+            drawSynth.triggerAttackRelease("A3", "16n");
+        }
+
+        function playMoveSound() {
+            if (!isAudioInitialized) return;
+            moveSynth.triggerAttackRelease("A4", "64n");
+        }
+
+        function playRoundChime() {
+            if (!isAudioInitialized) return;
+            roundSynth.triggerAttackRelease("C5", "16n");
+        }
+
+        function playVictoryMusic() {
+            if (!isAudioInitialized) return;
+            stopAllMusic(); 
+            victoryPart.start(0);
+            Tone.Transport.start();
+        }
+
+        function playDefeatMusic() {
+            if (!isAudioInitialized) return;
+            stopAllMusic(); 
+            defeatPart.start(0);
+            Tone.Transport.start();
+        }
+
+        function stopAllMusic() {
+            if (!isAudioInitialized) return;
+            victoryPart.stop(0);
+            defeatPart.stop(0);
+            Tone.Transport.stop();
+        }
+
+
+        // --- Utility Functions ---
+
+        async function fetchWithRetry(url, options, maxRetries = 3) {
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response;
+                } catch (error) {
+                    console.error(`Attempt ${i + 1} failed.`, error);
+                    if (i === maxRetries - 1) throw error; 
+                    const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+        
+        // --- Core Game Functions ---
+
+        function showRulesModal() {
+            document.getElementById('rules-modal').classList.remove('hidden');
+        }
+
+        function hideRulesModal() {
+            document.getElementById('rules-modal').classList.add('hidden');
+        }
+        
+        // --- Pause/Resume/Restart Functions ---
+
+        function resetTimer() {
+            clearInterval(timerInterval);
+            elapsedTimeInRound = 0; // Reset for a new round
+            timerBarElem.style.transition = 'width 0.1s linear';
+            timerBarElem.style.width = '100%';
+        }
+        
+        function startTimer() {
+            const step = 100;
+            const startTime = Date.now() - elapsedTimeInRound;
+
+            timerInterval = setInterval(() => {
+                if (isPaused) {
+                    // This should theoretically not run if logic is correct, but is a safety check.
+                    clearInterval(timerInterval); 
+                    return;
+                }
+                
+                elapsedTimeInRound = Date.now() - startTime;
+                
+                const percentage = 100 - (elapsedTimeInRound / timerDuration) * 100;
+                timerBarElem.style.width = `${Math.max(0, percentage)}%`;
+
+                if (elapsedTimeInRound >= timerDuration) {
+                    clearInterval(timerInterval);
+                    handleTimeOut();
+                }
+            }, step);
+        }
+
+        function disableChoices(stopTimer = true) {
+            choiceButtons.forEach(btn => btn.disabled = true);
+            if (stopTimer) {
+                clearInterval(timerInterval);
+                timerBarElem.style.transition = 'none'; // Stop visual transition
+            }
+        }
+        
+        function enableChoices() {
+            choiceButtons.forEach(btn => btn.disabled = false);
+        }
+
+        function togglePauseResume() {
+            if (gameScreen.classList.contains('hidden') || botScore >= 3 || userScore >= 3) return;
+            
+            isPaused = !isPaused;
+            
+            if (isPaused) {
+                // PAUSE
+                clearInterval(timerInterval);
+                pauseResumeBtn.textContent = 'Resume';
+                pauseResumeBtn.classList.remove('bg-yellow-600', 'hover:bg-yellow-700', 'shadow-yellow-500/50');
+                pauseResumeBtn.classList.add('bg-green-600', 'hover:bg-green-700', 'shadow-green-500/50');
+                disableChoices(false); // Disable buttons, but timer interval is already cleared
+                resultMessageElem.textContent = 'Game Paused. Click Resume to continue.';
+                timerBarElem.style.transition = 'none'; // Freeze the bar visually
+            } else {
+                // RESUME
+                pauseResumeBtn.textContent = 'Pause';
+                pauseResumeBtn.classList.remove('bg-green-600', 'hover:bg-green-700', 'shadow-green-500/50');
+                pauseResumeBtn.classList.add('bg-yellow-600', 'hover:bg-yellow-700', 'shadow-yellow-500/50');
+                
+                startTimer(); 
+                
+                if (elapsedTimeInRound < timerDuration) {
+                    enableChoices();
+                    resultMessageElem.textContent = 'Make your choice!';
+                    // Resume transition for the remaining time
+                    const remainingDuration = (timerDuration - elapsedTimeInRound) / 1000;
+                    timerBarElem.style.transition = `width ${remainingDuration}s linear`;
+                }
+            }
+        }
+
+        function showRestartConfirmation() {
+            document.getElementById('restart-confirm-modal').classList.remove('hidden');
+        }
+
+        function hideRestartConfirmation() {
+            document.getElementById('restart-confirm-modal').classList.add('hidden');
+        }
+
+        function confirmRestart() {
+            hideRestartConfirmation();
+            resetGame(); 
+        }
+
+        // --- Game Flow Functions ---
+
+        function startGame() {
+            initAudio(); 
+            stopAllMusic();
+
+            userName = userNameInput.value.trim();
+            if (userName.length === 0) {
+                document.getElementById('error-message').classList.remove('hidden');
+                return;
+            }
+            document.getElementById('error-message').classList.add('hidden');
+            
+            userNameDisplay.textContent = userName.toUpperCase();
+            nameScreen.classList.add('hidden');
+            gameScreen.classList.remove('hidden');
+            gameControls.classList.remove('hidden'); // Show controls
+            
+            userScore = 0;
+            botScore = 0;
+            updateScoreboard();
+            startRound();
+        }
+
+        function updateScoreboard() {
+            userScoreElem.textContent = userScore;
+            botScoreElem.textContent = botScore;
+        }
+
+        function startRound() {
+            playRoundChime();
+
+            isPaused = false; // Ensure not paused
+            resetTimer(); // Also resets elapsedTimeInRound
+            
+            // UI setup for unpaused state
+            pauseResumeBtn.textContent = 'Pause';
+            pauseResumeBtn.classList.remove('bg-green-600', 'hover:bg-green-700', 'shadow-green-500/50');
+            pauseResumeBtn.classList.add('bg-yellow-600', 'hover:bg-yellow-700', 'shadow-yellow-500/50');
+
+            resultMessageElem.textContent = 'Make your choice!';
+            resultMessageElem.classList.remove('zoom-out-msg');
+            userHandElem.textContent = '❓';
+            userHandElem.classList.remove('text-yellow-400', 'text-green-400', 'text-red-400');
+            botHandElem.textContent = '❓';
+            botHandElem.classList.add('shaking');
+            botHandElem.classList.remove('text-yellow-400', 'text-green-400', 'text-red-400');
+            
+            enableChoices();
+
+            // Start the 5-second timer transition
+            timerBarElem.style.transition = `width ${timerDuration / 1000}s linear`;
+            timerBarElem.style.width = '0%';
+            
+            // Start the logic timer
+            setTimeout(startTimer, 50);
+        }
+
+        function handleTimeOut() {
+            disableChoices(true);
+            resultMessageElem.textContent = `${userName} timed out! Bot wins this round.`;
+            botScore++;
+            updateScoreboard();
+            playLoseSound();
+            checkGameOver();
+        }
+
+        function userChoice(userChoice) {
+            disableChoices(true); // Stop timer and disable buttons
+            playMoveSound();
+
+            const selectedButton = document.getElementById(`${userChoice}-btn`);
+            selectedButton.classList.add('ring-4', 'ring-blue-500');
+            
+            const botIndex = Math.floor(Math.random() * choices.length);
+            const botChoice = choices[botIndex];
+
+            userHandElem.textContent = choiceEmojis[userChoice];
+            botHandElem.classList.remove('shaking');
+            botHandElem.textContent = choiceEmojis[botChoice];
+
+            determineWinner(userChoice, botChoice);
+        }
+
+        function determineWinner(user, bot) {
+            let result; 
+
+            if (user === bot) {
+                result = 'draw';
+            } else if (
+                (user === 'stone' && bot === 'scissor') ||
+                (user === 'scissor' && bot === 'paper') ||
+                (user === 'paper' && bot === 'stone')
+            ) {
+                result = 'win';
+                userScore++;
+            } else {
+                result = 'loss';
+                botScore++;
+            }
+
+            if (result === 'win') {
+                playWinSound();
+            } else if (result === 'loss') {
+                playLoseSound();
+            } else {
+                playDrawSound();
+            }
+
+
+            let msg = '';
+            let colorClass = '';
+
+            if (result === 'win') {
+                msg = `${userName} wins! ${user.toUpperCase()} beats ${bot.toUpperCase()}.`;
+                colorClass = 'text-green-400';
+            } else if (result === 'loss') {
+                msg = `Bot wins! ${bot.toUpperCase()} beats ${user.toUpperCase()}.`;
+                colorClass = 'text-red-400';
+            } else {
+                msg = `It's a draw! Both chose ${user.toUpperCase()}.`;
+                colorClass = 'text-yellow-400';
+            }
+            
+            resultMessageElem.textContent = msg;
+            resultMessageElem.className = `text-2xl font-bold text-center h-8 ${colorClass}`;
+            
+            userHandElem.classList.add(result === 'win' ? 'text-green-400' : (result === 'loss' ? 'text-red-400' : 'text-yellow-400'));
+            botHandElem.classList.add(result === 'loss' ? 'text-green-400' : (result === 'win' ? 'text-red-400' : 'text-yellow-400'));
+
+
+            updateScoreboard();
+            checkGameOver();
+        }
+        
+        function prepareNextRound(delay = 3000) {
+            // Remove ring from previous choice button
+            choiceButtons.forEach(btn => btn.classList.remove('ring-4', 'ring-blue-500'));
+            
+            let countdown = delay / 1000;
+            
+            resultMessageElem.textContent = `Next Round Starts in ${countdown}...`;
+            resultMessageElem.classList.add('zoom-out-msg'); 
+            
+            const countdownInterval = setInterval(() => {
+                countdown--;
+                if (countdown > 0) {
+                    resultMessageElem.textContent = `Next Round Starts in ${countdown}...`;
+                } else {
+                    clearInterval(countdownInterval);
+                    startRound();
+                }
+            }, 1000);
+        }
+
+        function checkGameOver() {
+            if (userScore >= 3) {
+                showGameOver('win');
+            } else if (botScore >= 3) {
+                showGameOver('loss');
+            } else {
+                prepareNextRound();
+            }
+        }
+
+        async function showGameOver(finalResult) {
+            // Remove ring from previous choice button
+            choiceButtons.forEach(btn => btn.classList.remove('ring-4', 'ring-blue-500'));
+            
+            gameControls.classList.add('hidden'); // Hide controls when game over modal is visible
+            modal.classList.remove('hidden');
+            
+            let message;
+            
+            if (finalResult === 'win') {
+                playVictoryMusic(); 
+                modalTitle.textContent = `CHAMPION! ${userName}`;
+                modalTitle.className = 'text-4xl title-text text-yellow-400';
+                message = `Congratulations! You defeated the BOT ${userScore}-${botScore} and claimed the Stone-Paper-Scissor crown.`;
+                modalMessage.textContent = message;
+                await generateChampionImage(userName);
+            } else {
+                playDefeatMusic(); 
+                modalTitle.textContent = `Better Luck Next Time!`;
+                modalTitle.className = 'text-4xl title-text text-red-400';
+                message = `The BOT won ${botScore}-${userScore}. Don't worry, even the masters lose sometimes. Keep practicing!`;
+                modalMessage.textContent = message;
+                
+                championImage.src = "";
+                championImage.classList.add('hidden');
+                imageLoadingText.classList.add('hidden');
+                document.getElementById('image-display-area').classList.add('h-0', 'border-none', 'hidden');
+            }
+            
+            await generateCustomMessage(finalResult, message);
+        }
+        
+        async function generateCustomMessage(finalResult, fallbackMessage) {
+            if (!auth || !auth.currentUser) return;
+
+            const systemPrompt = finalResult === 'win'
+                ? "You are a master of ceremonies announcing a grand champion. Provide a single, extremely celebratory and epic paragraph for the user's victory in Rock-Paper-Scissors."
+                : "You are a wise coach offering words of encouragement. Provide a single, heartfelt condolence paragraph to lift the user's spirits after a loss in Rock-Paper-Scissors.";
+
+            const userQuery = finalResult === 'win'
+                ? `The user, named ${userName}, has won the championship against the Bot with a final score of ${userScore} to ${botScore}.`
+                : `The user, named ${userName}, has lost the championship against the Bot with a final score of ${userScore} to ${botScore}.`;
+            
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+
+            try {
+                const response = await fetchWithRetry(API_URL_TEXT, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                const generatedText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (generatedText) {
+                    modalMessage.textContent = generatedText;
+                } else {
+                    modalMessage.textContent = fallbackMessage; 
+                }
+            } catch (error) {
+                console.error("Text generation failed:", error);
+                modalMessage.textContent = fallbackMessage; 
+            }
+        }
+        
+        async function generateChampionImage(userName) {
+            if (!auth || !auth.currentUser) return;
+            
+            let success = false;
+            championImage.classList.add('hidden');
+            imageLoadingText.classList.remove('hidden');
+            const imageDisplayArea = document.getElementById('image-display-area');
+            imageDisplayArea.classList.remove('h-0', 'border-none', 'hidden'); 
+            imageDisplayArea.classList.add('h-64');
+
+            const prompt = `A highly stylized, epic digital art image of a golden championship trophy and a 'Champion' banner, celebrating the Rock-Paper-Scissors winner, ${userName}. Cinematic, vibrant colors, close-up shot.`;
+
+            const payload = {
+                instances: { prompt: prompt },
+                parameters: { "sampleCount": 1 }
+            };
+
+            try {
+                const response = await fetchWithRetry(API_URL_IMAGE, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+
+                const base64Data = result.predictions?.[0]?.bytesBase64Encoded;
+                
+                if (base64Data) {
+                    const imageUrl = `data:image/png;base64,${base64Data}`;
+                    championImage.src = imageUrl;
+                    championImage.classList.remove('hidden');
+                    success = true;
+                } else {
+                    console.error("Image generation failed: No base64 data received in response.");
+                }
+
+            } catch (error) {
+                console.error("Image generation failed (401 likely API key issue):", error);
+            } finally {
+                imageLoadingText.classList.add('hidden');
+                if (!success) {
+                    imageDisplayArea.classList.add('h-0', 'border-none', 'hidden');
+                    imageDisplayArea.classList.remove('h-64');
+                }
+            }
+        }
+
+        function resetGame() {
+            // 1. Clean up ongoing processes
+            resetTimer(); 
+            stopAllMusic();
+            modal.classList.add('hidden');
+            hideRestartConfirmation();
+            
+            // 2. Reset states and scores
+            isPaused = false;
+            elapsedTimeInRound = 0;
+            userScore = 0;
+            botScore = 0;
+            updateScoreboard();
+            
+            // 3. Reset UI
+            resultMessageElem.textContent = 'Make your choice!';
+            userHandElem.textContent = '❓';
+            botHandElem.textContent = '❓';
+            botHandElem.classList.remove('shaking');
+            userHandElem.classList.remove('text-yellow-400', 'text-green-400', 'text-red-400');
+            botHandElem.classList.remove('text-yellow-400', 'text-green-400', 'text-red-400');
+            // Remove ring from previous choice button
+            choiceButtons.forEach(btn => btn.classList.remove('ring-4', 'ring-blue-500'));
+
+
+            // Reset image display area (for next win)
+            championImage.src = "";
+            championImage.classList.add('hidden');
+            const imageDisplayArea = document.getElementById('image-display-area');
+            imageDisplayArea.classList.remove('h-0', 'border-none', 'hidden');
+            imageDisplayArea.classList.add('h-64');
+
+            // 4. Switch to Name Screen and hide game controls
+            nameScreen.classList.remove('hidden');
+            gameScreen.classList.add('hidden');
+            gameControls.classList.add('hidden');
+            userNameInput.value = userName; 
+        }
+
+    </script>
+</body>
+</html>
